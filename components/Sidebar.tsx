@@ -10,10 +10,15 @@ const links = [
   { href: "/accounts", label: "دليل الحسابات" },
   { href: "/contacts", label: "العملاء والموردون" },
   { href: "/journal", label: "القيود المحاسبية" },
+  { href: "/vouchers/receipt", label: "سندات القبض" },
+  { href: "/vouchers/payment", label: "سندات الصرف" },
   { href: "/cash-bank", label: "الصناديق والبنوك" },
   { href: "/debts-assets", label: "الديون والأصول" },
   { href: "/users", label: "المستخدمون والصلاحيات" },
-  { href: "/reports", label: "التقارير" },
+  { href: "/reports", label: "ميزان المراجعة" },
+  { href: "/reports/statement", label: "كشف حساب" },
+  { href: "/reports/income", label: "قائمة الدخل" },
+  { href: "/reports/balance-sheet", label: "الميزانية العمومية" },
 ];
 
 export default function Sidebar() {
