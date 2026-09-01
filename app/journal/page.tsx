@@ -15,7 +15,7 @@ type Entry = {
 
 type Account = { id: string; code: string; name: string };
 
-type Line = { account_id: string; debit: string; credit: string; description: string };
+type Line = { id?: string; account_id: string; debit: string; credit: string; description: string };
 
 const emptyLine = (): Line => ({ account_id: "", debit: "", credit: "", description: "" });
 
@@ -24,6 +24,7 @@ export default function JournalPage() {
   const [entries, setEntries] = useState<Entry[]>([]);
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [showForm, setShowForm] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
   const [description, setDescription] = useState("");
   const [lines, setLines] = useState<Line[]>([emptyLine(), emptyLine()]);
@@ -58,6 +59,42 @@ export default function JournalPage() {
     setLines((prev) => prev.map((l, idx) => (idx === i ? { ...l, ...patch } : l)));
   }
 
+  function resetForm() {
+    setDate(new Date().toISOString().slice(0, 10));
+    setDescription("");
+    setLines([emptyLine(), emptyLine()]);
+    setEditingId(null);
+    setShowForm(false);
+    setError("");
+  }
+
+  function openNewForm() {
+    resetForm();
+    setShowForm(true);
+  }
+
+  async function openEditForm(entry: Entry) {
+    setError("");
+    const { data: entryLines } = await supabase
+      .from("journal_lines")
+      .select("id, account_id, debit, credit, description")
+      .eq("entry_id", entry.id);
+
+    setEditingId(entry.id);
+    setDate(entry.entry_date);
+    setDescription(entry.description || "");
+    setLines(
+      (entryLines || []).map((l: any) => ({
+        id: l.id,
+        account_id: l.account_id,
+        debit: l.debit ? String(l.debit) : "",
+        credit: l.credit ? String(l.credit) : "",
+        description: l.description || "",
+      }))
+    );
+    setShowForm(true);
+  }
+
   async function saveEntry(post: boolean) {
     if (!org) return;
     setError("");
@@ -67,28 +104,46 @@ export default function JournalPage() {
     }
     setBusy(true);
 
-    const { data: entry, error: entErr } = await supabase
-      .from("journal_entries")
-      .insert({
-        org_id: org.id,
-        entry_date: date,
-        description,
-        status: "مسودة",
-        created_by: (await supabase.auth.getUser()).data.user?.id,
-      })
-      .select()
-      .single();
+    const validLines = lines.filter((l) => l.account_id && (parseFloat(l.debit) || parseFloat(l.credit)));
 
-    if (entErr || !entry) {
-      setError("خطأ: " + entErr?.message);
-      setBusy(false);
-      return;
+    let entryId = editingId;
+
+    if (editingId) {
+      // تعديل قيد موجود: نحدّث بياناته الأساسية، ونستبدل كل الأسطر بالجديدة
+      const { error: updErr } = await supabase
+        .from("journal_entries")
+        .update({ entry_date: date, description })
+        .eq("id", editingId);
+      if (updErr) {
+        setError("خطأ: " + updErr.message);
+        setBusy(false);
+        return;
+      }
+      await supabase.from("journal_lines").delete().eq("entry_id", editingId);
+    } else {
+      const { data: entry, error: entErr } = await supabase
+        .from("journal_entries")
+        .insert({
+          org_id: org.id,
+          entry_date: date,
+          description,
+          status: "مسودة",
+          created_by: (await supabase.auth.getUser()).data.user?.id,
+        })
+        .select()
+        .single();
+
+      if (entErr || !entry) {
+        setError("خطأ: " + entErr?.message);
+        setBusy(false);
+        return;
+      }
+      entryId = entry.id;
     }
 
-    const validLines = lines.filter((l) => l.account_id && (parseFloat(l.debit) || parseFloat(l.credit)));
     await supabase.from("journal_lines").insert(
       validLines.map((l) => ({
-        entry_id: entry.id,
+        entry_id: entryId,
         account_id: l.account_id,
         debit: parseFloat(l.debit) || 0,
         credit: parseFloat(l.credit) || 0,
@@ -100,19 +155,31 @@ export default function JournalPage() {
       const { error: postErr } = await supabase
         .from("journal_entries")
         .update({ status: "مرحل" })
-        .eq("id", entry.id);
+        .eq("id", entryId as string);
       if (postErr) {
-        setError("تم حفظ القيد كمسودة، لكن تعذّر ترحيله: " + postErr.message);
+        setError("تم الحفظ كمسودة، لكن تعذّر الترحيل: " + postErr.message);
         setBusy(false);
         load();
         return;
       }
     }
 
-    setDescription("");
-    setLines([emptyLine(), emptyLine()]);
-    setShowForm(false);
+    resetForm();
     setBusy(false);
+    load();
+  }
+
+  async function revertToDraft(id: string) {
+    await supabase.from("journal_entries").update({ status: "مسودة" }).eq("id", id);
+    load();
+  }
+
+  async function deleteEntry(id: string) {
+    if (!confirm("هل أنت متأكد من حذف هذا القيد؟ لا يمكن التراجع عن هذا الإجراء.")) return;
+    await supabase
+      .from("journal_entries")
+      .update({ deleted_at: new Date().toISOString(), status: "ملغى" })
+      .eq("id", id);
     load();
   }
 
@@ -130,13 +197,18 @@ export default function JournalPage() {
           <h1 className="text-2xl font-medium">القيود المحاسبية</h1>
           <p className="text-forest-800/60 text-sm mt-1">كل قيد يجب أن يكون متوازناً (مدين = دائن)</p>
         </div>
-        <button className="btn-primary" onClick={() => setShowForm((s) => !s)}>
+        <button className="btn-primary" onClick={() => (showForm ? resetForm() : openNewForm())}>
           {showForm ? "إلغاء" : "+ قيد جديد"}
         </button>
       </div>
 
       {showForm && (
         <div className="card p-5 mb-6">
+          {editingId && (
+            <p className="text-sm text-amber-700 bg-amber-50 rounded-lg px-3 py-2 mb-4">
+              أنت تعدّل قيداً موجوداً. سيتم استبدال كل أسطره بما تكتبه الآن.
+            </p>
+          )}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
             <div>
               <label className="text-sm text-forest-800/70 block mb-1">التاريخ</label>
@@ -218,7 +290,7 @@ export default function JournalPage() {
                 حفظ كمسودة
               </button>
               <button className="btn-primary" disabled={busy || !balanced} onClick={() => saveEntry(true)}>
-                ترحيل القيد
+                {editingId ? "حفظ وترحيل" : "ترحيل القيد"}
               </button>
             </div>
           </div>
@@ -234,6 +306,7 @@ export default function JournalPage() {
               <th>التاريخ</th>
               <th>الوصف</th>
               <th>الحالة</th>
+              <th>إجراءات</th>
             </tr>
           </thead>
           <tbody>
@@ -247,11 +320,28 @@ export default function JournalPage() {
                     {statusLabel[e.status]}
                   </span>
                 </td>
+                <td>
+                  <div className="flex gap-3 text-sm">
+                    {e.status === "مسودة" && (
+                      <button className="text-forest-600 hover:underline" onClick={() => openEditForm(e)}>
+                        تعديل
+                      </button>
+                    )}
+                    {e.status === "مرحل" && (
+                      <button className="text-amber-700 hover:underline" onClick={() => revertToDraft(e.id)}>
+                        تراجع لمسودة
+                      </button>
+                    )}
+                    <button className="text-red-600 hover:underline" onClick={() => deleteEntry(e.id)}>
+                      حذف
+                    </button>
+                  </div>
+                </td>
               </tr>
             ))}
             {entries.length === 0 && (
               <tr>
-                <td colSpan={4} className="text-center py-8 text-forest-800/50">
+                <td colSpan={5} className="text-center py-8 text-forest-800/50">
                   لا توجد قيود بعد.
                 </td>
               </tr>

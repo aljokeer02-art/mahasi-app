@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { useAuth } from "@/contexts/AuthContext";
 
 export default function Home() {
-  const { user, loading, orgs } = useAuth();
+  const { user, loading, orgs, isPlatformAdmin } = useAuth();
   const router = useRouter();
 
   useEffect(() => {
@@ -13,11 +13,11 @@ export default function Home() {
     if (!user) {
       router.replace("/login");
     } else if (orgs.length === 0) {
-      router.replace("/onboarding");
+      router.replace(isPlatformAdmin ? "/onboarding" : "/no-access");
     } else {
       router.replace("/dashboard");
     }
-  }, [user, loading, orgs, router]);
+  }, [user, loading, orgs, isPlatformAdmin, router]);
 
   return (
     <div className="min-h-screen flex items-center justify-center">

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 import { useAuth } from "@/contexts/AuthContext";
@@ -9,8 +9,13 @@ export default function OnboardingPage() {
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const { user, refreshOrgs, setOrgId } = useAuth();
+  const { user, isPlatformAdmin, loading, refreshOrgs, setOrgId } = useAuth();
   const router = useRouter();
+
+  useEffect(() => {
+    if (loading) return;
+    if (!isPlatformAdmin) router.replace("/no-access");
+  }, [loading, isPlatformAdmin, router]);
 
   async function createOrg(e: React.FormEvent) {
     e.preventDefault();
@@ -30,7 +35,6 @@ export default function OnboardingPage() {
       return;
     }
 
-    // إنشاء عملة أساسية افتراضية (ريال سعودي)
     await supabase.from("currencies").insert({
       org_id: data.id,
       code: "SAR",
@@ -45,13 +49,21 @@ export default function OnboardingPage() {
     router.replace("/dashboard");
   }
 
+  if (loading || !isPlatformAdmin) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <p className="text-forest-800/60 text-sm">جارِ التحميل...</p>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen flex items-center justify-center px-4">
       <div className="w-full max-w-sm">
         <div className="text-center mb-8">
           <h1 className="text-xl font-medium">مرحباً بك 👋</h1>
           <p className="text-forest-800/60 text-sm mt-1">
-            أنشئ مساحة محاسبة عائلتك للبدء
+            أنشئ مساحة محاسبة عائلة جديدة
           </p>
         </div>
         <form onSubmit={createOrg} className="card p-6 space-y-3">

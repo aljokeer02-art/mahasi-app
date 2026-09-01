@@ -6,14 +6,14 @@ import { useAuth } from "@/contexts/AuthContext";
 import Sidebar from "./Sidebar";
 
 export default function AppShell({ children }: { children: React.ReactNode }) {
-  const { user, loading, org, orgs } = useAuth();
+  const { user, loading, org, orgs, isPlatformAdmin } = useAuth();
   const router = useRouter();
 
   useEffect(() => {
     if (loading) return;
     if (!user) router.replace("/login");
-    else if (orgs.length === 0) router.replace("/onboarding");
-  }, [user, loading, orgs, router]);
+    else if (orgs.length === 0) router.replace(isPlatformAdmin ? "/onboarding" : "/no-access");
+  }, [user, loading, orgs, isPlatformAdmin, router]);
 
   if (loading || !user || !org) {
     return (

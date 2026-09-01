@@ -8,12 +8,14 @@ import { useAuth } from "@/contexts/AuthContext";
 const links = [
   { href: "/dashboard", label: "لوحة التحكم" },
   { href: "/accounts", label: "دليل الحسابات" },
+  { href: "/opening-balances", label: "الأرصدة الافتتاحية" },
   { href: "/contacts", label: "العملاء والموردون" },
   { href: "/journal", label: "القيود المحاسبية" },
   { href: "/vouchers/receipt", label: "سندات القبض" },
   { href: "/vouchers/payment", label: "سندات الصرف" },
   { href: "/cash-bank", label: "الصناديق والبنوك" },
   { href: "/debts-assets", label: "الديون والأصول" },
+  { href: "/currencies", label: "العملات" },
   { href: "/users", label: "المستخدمون والصلاحيات" },
   { href: "/reports", label: "ميزان المراجعة" },
   { href: "/reports/statement", label: "كشف حساب" },
@@ -23,7 +25,7 @@ const links = [
 
 export default function Sidebar() {
   const pathname = usePathname();
-  const { user, org, orgs, setOrgId } = useAuth();
+  const { user, org, orgs, setOrgId, isPlatformAdmin } = useAuth();
   const router = useRouter();
 
   async function signOut() {
@@ -58,6 +60,14 @@ export default function Sidebar() {
               </option>
             ))}
           </select>
+        </div>
+      )}
+
+      {isPlatformAdmin && (
+        <div className="px-4 pt-3">
+          <Link href="/onboarding" className="block text-center text-xs bg-gold/20 text-gold border border-gold/40 rounded-md py-1.5 hover:bg-gold/30">
+            + إنشاء مساحة جديدة
+          </Link>
         </div>
       )}
 
