@@ -7,9 +7,27 @@ import { supabase } from "@/lib/supabaseClient";
 import { exportToExcel } from "@/lib/exportExcel";
 import { exportElementToPdf } from "@/lib/exportPdf";
 
-type Account = { id: string; code: string; name: string; opening_balance: number };
+type Account = { id: string; code: string; name: string; opening_balance: number; parent_id: string | null };
 type Contact = { id: string; name: string };
 type Line = { entry_date: string; description: string | null; debit: number; credit: number; entry_number: number };
+
+function buildAccountTree(accounts: Account[]): (Account & { depth: number })[] {
+  const byParent: Record<string, Account[]> = {};
+  accounts.forEach((a) => {
+    const key = a.parent_id || "root";
+    if (!byParent[key]) byParent[key] = [];
+    byParent[key].push(a);
+  });
+  const result: (Account & { depth: number })[] = [];
+  function walk(parentKey: string, depth: number) {
+    (byParent[parentKey] || []).forEach((a) => {
+      result.push({ ...a, depth });
+      walk(a.id, depth + 1);
+    });
+  }
+  walk("root", 0);
+  return result;
+}
 
 export default function AccountStatementPage() {
   const { org } = useAuth();
@@ -25,7 +43,7 @@ export default function AccountStatementPage() {
 
   useEffect(() => {
     if (!org) return;
-    supabase.from("accounts").select("id, code, name, opening_balance").eq("org_id", org.id).is("deleted_at", null).order("code").then((r) => setAccounts(r.data || []));
+    supabase.from("accounts").select("id, code, name, opening_balance, parent_id").eq("org_id", org.id).is("deleted_at", null).order("code").then((r) => setAccounts(r.data || []));
     supabase.from("contacts").select("id, name").eq("org_id", org.id).is("deleted_at", null).order("name").then((r) => setContacts(r.data || []));
   }, [org]);
 
@@ -121,7 +139,11 @@ export default function AccountStatementPage() {
         <select className="input sm:col-span-2" value={selectedId} onChange={(e) => setSelectedId(e.target.value)}>
           <option value="">{mode === "account" ? "اختر الحساب..." : "اختر جهة الاتصال..."}</option>
           {mode === "account"
-            ? accounts.map((a) => <option key={a.id} value={a.id}>{a.code} - {a.name}</option>)
+            ? buildAccountTree(accounts).map((a) => (
+                <option key={a.id} value={a.id}>
+                  {"— ".repeat(a.depth)}{a.code} - {a.name}
+                </option>
+              ))
             : contacts.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
         </select>
         <input type="date" className="input" value={fromDate} onChange={(e) => setFromDate(e.target.value)} placeholder="من تاريخ" />

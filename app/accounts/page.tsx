@@ -12,6 +12,7 @@ type Account = {
   category: string;
   opening_balance: number;
   currency_id: string | null;
+  parent_id: string | null;
   is_active: boolean;
 };
 type Currency = { id: string; code: string; name: string };
@@ -24,7 +25,26 @@ const categories = [
   { value: "مصروفات", label: "مصروفات" },
 ];
 
-const emptyForm = { code: "", name: "", category: "اصول", opening_balance: "0", currency_id: "" };
+const emptyForm = { code: "", name: "", category: "اصول", opening_balance: "0", currency_id: "", parent_id: "" };
+
+// ترتيب الحسابات بحيث يظهر كل حساب فرعي مباشرة تحت أبيه
+function buildTree(accounts: Account[]): (Account & { depth: number })[] {
+  const byParent: Record<string, Account[]> = {};
+  accounts.forEach((a) => {
+    const key = a.parent_id || "root";
+    if (!byParent[key]) byParent[key] = [];
+    byParent[key].push(a);
+  });
+  const result: (Account & { depth: number })[] = [];
+  function walk(parentKey: string, depth: number) {
+    (byParent[parentKey] || []).forEach((a) => {
+      result.push({ ...a, depth });
+      walk(a.id, depth + 1);
+    });
+  }
+  walk("root", 0);
+  return result;
+}
 
 export default function AccountsPage() {
   const { org } = useAuth();
@@ -40,7 +60,7 @@ export default function AccountsPage() {
     const [accRes, curRes] = await Promise.all([
       supabase
         .from("accounts")
-        .select("id, code, name, category, opening_balance, currency_id, is_active")
+        .select("id, code, name, category, opening_balance, currency_id, parent_id, is_active")
         .eq("org_id", org.id)
         .is("deleted_at", null)
         .order("code"),
@@ -68,6 +88,7 @@ export default function AccountsPage() {
       category: a.category,
       opening_balance: String(a.opening_balance),
       currency_id: a.currency_id || "",
+      parent_id: a.parent_id || "",
     });
     setEditingId(a.id);
     setShowForm(true);
@@ -83,6 +104,7 @@ export default function AccountsPage() {
       category: form.category,
       opening_balance: parseFloat(form.opening_balance || "0"),
       currency_id: form.currency_id || null,
+      parent_id: form.parent_id || null,
     };
 
     if (editingId) {
@@ -99,19 +121,25 @@ export default function AccountsPage() {
   }
 
   async function deleteAccount(id: string) {
+    if (accounts.some((a) => a.parent_id === id)) {
+      alert("لا يمكن حذف هذا الحساب لأنه يحتوي على حسابات فرعية. احذف الحسابات الفرعية أولاً.");
+      return;
+    }
     if (!confirm("حذف هذا الحساب؟ لن يظهر في أي قوائم أو تقارير بعد الآن.")) return;
     await supabase.from("accounts").update({ deleted_at: new Date().toISOString() }).eq("id", id);
     load();
   }
 
   const currencyName = (id: string | null) => currencies.find((c) => c.id === id)?.code || "—";
+  const tree = buildTree(accounts);
+  const parentOptions = accounts.filter((a) => a.id !== editingId);
 
   return (
     <AppShell>
       <div className="flex items-center justify-between mb-6 no-print">
         <div>
           <h1 className="text-2xl font-medium">دليل الحسابات</h1>
-          <p className="text-forest-800/60 text-sm mt-1">القائمة الكاملة لحسابات المؤسسة</p>
+          <p className="text-forest-800/60 text-sm mt-1">القائمة الكاملة لحسابات المؤسسة، وتقدر تنشئ حسابات فرعية تحت أي حساب</p>
         </div>
         <div className="flex gap-2">
           <button className="btn-secondary" onClick={() => window.print()}>طباعة</button>
@@ -152,6 +180,13 @@ export default function AccountsPage() {
               <option key={c.id} value={c.id}>{c.code} - {c.name}</option>
             ))}
           </select>
+
+          <select className="input sm:col-span-2" value={form.parent_id} onChange={(e) => setForm({ ...form, parent_id: e.target.value })}>
+            <option value="">لا يوجد (حساب رئيسي)</option>
+            {parentOptions.map((a) => (
+              <option key={a.id} value={a.id}>{a.code} - {a.name}</option>
+            ))}
+          </select>
           <input
             className="input"
             type="number"
@@ -160,9 +195,12 @@ export default function AccountsPage() {
             value={form.opening_balance}
             onChange={(e) => setForm({ ...form, opening_balance: e.target.value })}
           />
-          <button type="submit" disabled={busy} className="btn-primary sm:col-span-1">
+          <button type="submit" disabled={busy} className="btn-primary sm:col-span-2">
             {busy ? "جارِ الحفظ..." : editingId ? "حفظ التعديل" : "حفظ الحساب"}
           </button>
+          <p className="text-xs text-forest-800/50 sm:col-span-5">
+            💡 مثال: أنشئ حساباً رئيسياً "الصندوق"، ثم أنشئ "صندوق فرعي 1" واختر "الصندوق" كحساب أب له.
+          </p>
         </form>
       )}
 
@@ -179,10 +217,13 @@ export default function AccountsPage() {
             </tr>
           </thead>
           <tbody>
-            {accounts.map((a) => (
+            {tree.map((a) => (
               <tr key={a.id}>
                 <td className="font-mono text-forest-800/70">{a.code}</td>
-                <td className="font-medium">{a.name}</td>
+                <td className="font-medium" style={{ paddingRight: `${a.depth * 20}px` }}>
+                  {a.depth > 0 && <span className="text-forest-800/40 ml-1">↳</span>}
+                  {a.name}
+                </td>
                 <td>{categories.find((c) => c.value === a.category)?.label}</td>
                 <td dir="ltr" className="text-left">{currencyName(a.currency_id)}</td>
                 <td>{a.opening_balance.toLocaleString("ar")}</td>
