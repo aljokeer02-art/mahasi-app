@@ -4,6 +4,8 @@ import { useEffect, useState } from "react";
 import AppShell from "@/components/AppShell";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/lib/supabaseClient";
+import { exportToExcel } from "@/lib/exportExcel";
+import { exportElementToPdf } from "@/lib/exportPdf";
 
 type Account = { id: string; code: string; name: string };
 type CashBank = { id: string; account_id: string; type: string; accounts: { code: string; name: string } };
@@ -123,6 +125,26 @@ export default function ReceiptVoucherPage() {
         </div>
         <div className="flex gap-2">
           <button className="btn-secondary" onClick={() => window.print()}>طباعة</button>
+          <button
+            className="btn-secondary"
+            onClick={() =>
+              exportToExcel(
+                "سندات_القبض",
+                "سندات القبض",
+                vouchers.map((v) => ({
+                  "رقم السند": v.entry_number,
+                  "التاريخ": v.entry_date,
+                  "الطريقة": v.payment_method || "",
+                  "البيان": v.description || "",
+                }))
+              )
+            }
+          >
+            تصدير Excel
+          </button>
+          <button className="btn-secondary" onClick={() => exportElementToPdf("receipt-vouchers-table", "سندات_القبض")}>
+            تصدير PDF
+          </button>
           <button className="btn-primary" onClick={() => (showForm ? setShowForm(false) : openNewForm())}>
             {showForm ? "إلغاء" : "+ سند قبض جديد"}
           </button>
@@ -179,7 +201,7 @@ export default function ReceiptVoucherPage() {
         </form>
       )}
 
-      <div className="card overflow-hidden">
+      <div id="receipt-vouchers-table" className="card overflow-hidden">
         <table className="w-full table-base">
           <thead>
             <tr><th>رقم السند</th><th>التاريخ</th><th>الطريقة</th><th>البيان</th><th className="no-print">إجراءات</th></tr>

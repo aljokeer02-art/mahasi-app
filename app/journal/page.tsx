@@ -4,6 +4,8 @@ import { useEffect, useState } from "react";
 import AppShell from "@/components/AppShell";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/lib/supabaseClient";
+import { exportToExcel } from "@/lib/exportExcel";
+import { exportElementToPdf } from "@/lib/exportPdf";
 
 type Entry = {
   id: string;
@@ -192,18 +194,41 @@ export default function JournalPage() {
 
   return (
     <AppShell>
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex items-center justify-between mb-6 no-print">
         <div>
           <h1 className="text-2xl font-medium">القيود المحاسبية</h1>
           <p className="text-forest-800/60 text-sm mt-1">كل قيد يجب أن يكون متوازناً (مدين = دائن)</p>
         </div>
-        <button className="btn-primary" onClick={() => (showForm ? resetForm() : openNewForm())}>
-          {showForm ? "إلغاء" : "+ قيد جديد"}
-        </button>
+        <div className="flex gap-2">
+          <button className="btn-secondary" onClick={() => window.print()}>طباعة</button>
+          <button
+            className="btn-secondary"
+            onClick={() =>
+              exportToExcel(
+                "القيود_المحاسبية",
+                "القيود",
+                entries.map((e) => ({
+                  "رقم القيد": e.entry_number,
+                  "التاريخ": e.entry_date,
+                  "الوصف": e.description || "",
+                  "الحالة": statusLabel[e.status],
+                }))
+              )
+            }
+          >
+            تصدير Excel
+          </button>
+          <button className="btn-secondary" onClick={() => exportElementToPdf("journal-table", "القيود_المحاسبية")}>
+            تصدير PDF
+          </button>
+          <button className="btn-primary" onClick={() => (showForm ? resetForm() : openNewForm())}>
+            {showForm ? "إلغاء" : "+ قيد جديد"}
+          </button>
+        </div>
       </div>
 
       {showForm && (
-        <div className="card p-5 mb-6">
+        <div className="card p-5 mb-6 no-print">
           {editingId && (
             <p className="text-sm text-amber-700 bg-amber-50 rounded-lg px-3 py-2 mb-4">
               أنت تعدّل قيداً موجوداً. سيتم استبدال كل أسطره بما تكتبه الآن.
@@ -298,7 +323,7 @@ export default function JournalPage() {
         </div>
       )}
 
-      <div className="card overflow-hidden">
+      <div id="journal-table" className="card overflow-hidden">
         <table className="w-full table-base">
           <thead>
             <tr>
