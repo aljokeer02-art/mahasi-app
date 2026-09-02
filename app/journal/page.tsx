@@ -15,16 +15,26 @@ type Entry = {
   status: string;
 };
 
-type Account = { id: string; code: string; name: string };
+type Account = { id: string; code: string; name: string; currency_id: string | null };
+type Currency = { id: string; code: string; name: string; exchange_rate: number };
 
-type Line = { id?: string; account_id: string; debit: string; credit: string; description: string };
+type Line = {
+  id?: string;
+  account_id: string;
+  side: "debit" | "credit";
+  amount: string; // بالعملة الأساسية دائماً — هذا ما يدخل في التوازن
+  fx_amount: string; // المبلغ بعملة الحساب الأجنبية (إن وجدت)
+  exchange_rate: string;
+  description: string;
+};
 
-const emptyLine = (): Line => ({ account_id: "", debit: "", credit: "", description: "" });
+const emptyLine = (): Line => ({ account_id: "", side: "debit", amount: "", fx_amount: "", exchange_rate: "", description: "" });
 
 export default function JournalPage() {
   const { org } = useAuth();
   const [entries, setEntries] = useState<Entry[]>([]);
   const [accounts, setAccounts] = useState<Account[]>([]);
+  const [currencies, setCurrencies] = useState<Currency[]>([]);
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
@@ -35,17 +45,19 @@ export default function JournalPage() {
 
   async function load() {
     if (!org) return;
-    const [entRes, accRes] = await Promise.all([
+    const [entRes, accRes, curRes] = await Promise.all([
       supabase
         .from("journal_entries")
         .select("id, entry_number, entry_date, description, status")
         .eq("org_id", org.id)
         .is("deleted_at", null)
         .order("entry_date", { ascending: false }),
-      supabase.from("accounts").select("id, code, name").eq("org_id", org.id).is("deleted_at", null).order("code"),
+      supabase.from("accounts").select("id, code, name, currency_id").eq("org_id", org.id).is("deleted_at", null).order("code"),
+      supabase.from("currencies").select("id, code, name, exchange_rate").eq("org_id", org.id),
     ]);
     setEntries(entRes.data || []);
     setAccounts(accRes.data || []);
+    setCurrencies(curRes.data || []);
   }
 
   useEffect(() => {
@@ -53,12 +65,37 @@ export default function JournalPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [org]);
 
-  const totalDebit = lines.reduce((s, l) => s + (parseFloat(l.debit) || 0), 0);
-  const totalCredit = lines.reduce((s, l) => s + (parseFloat(l.credit) || 0), 0);
+  function accountCurrency(accountId: string): Currency | null {
+    const acc = accounts.find((a) => a.id === accountId);
+    if (!acc?.currency_id) return null;
+    return currencies.find((c) => c.id === acc.currency_id) || null;
+  }
+
+  const totalDebit = lines.reduce((s, l) => s + (l.side === "debit" ? parseFloat(l.amount) || 0 : 0), 0);
+  const totalCredit = lines.reduce((s, l) => s + (l.side === "credit" ? parseFloat(l.amount) || 0 : 0), 0);
   const balanced = totalDebit === totalCredit && totalDebit > 0;
 
   function updateLine(i: number, patch: Partial<Line>) {
     setLines((prev) => prev.map((l, idx) => (idx === i ? { ...l, ...patch } : l)));
+  }
+
+  function onAccountChange(i: number, accountId: string) {
+    const cur = accountCurrency(accountId);
+    if (cur) {
+      updateLine(i, { account_id: accountId, exchange_rate: String(cur.exchange_rate), fx_amount: "", amount: "" });
+    } else {
+      updateLine(i, { account_id: accountId, exchange_rate: "", fx_amount: "", amount: "" });
+    }
+  }
+
+  function onFxAmountChange(i: number, fxAmount: string, rate: string) {
+    const amount = (parseFloat(fxAmount) || 0) * (parseFloat(rate) || 0);
+    updateLine(i, { fx_amount: fxAmount, amount: amount ? String(amount) : "" });
+  }
+
+  function onRateChange(i: number, rate: string, fxAmount: string) {
+    const amount = (parseFloat(fxAmount) || 0) * (parseFloat(rate) || 0);
+    updateLine(i, { exchange_rate: rate, amount: amount ? String(amount) : "" });
   }
 
   function resetForm() {
@@ -79,7 +116,7 @@ export default function JournalPage() {
     setError("");
     const { data: entryLines } = await supabase
       .from("journal_lines")
-      .select("id, account_id, debit, credit, description")
+      .select("id, account_id, debit, credit, description, fx_amount, exchange_rate")
       .eq("entry_id", entry.id);
 
     setEditingId(entry.id);
@@ -89,8 +126,10 @@ export default function JournalPage() {
       (entryLines || []).map((l: any) => ({
         id: l.id,
         account_id: l.account_id,
-        debit: l.debit ? String(l.debit) : "",
-        credit: l.credit ? String(l.credit) : "",
+        side: Number(l.debit) > 0 ? "debit" : "credit",
+        amount: String(Number(l.debit) > 0 ? l.debit : l.credit),
+        fx_amount: l.fx_amount ? String(l.fx_amount) : "",
+        exchange_rate: l.exchange_rate ? String(l.exchange_rate) : "",
         description: l.description || "",
       }))
     );
@@ -106,12 +145,11 @@ export default function JournalPage() {
     }
     setBusy(true);
 
-    const validLines = lines.filter((l) => l.account_id && (parseFloat(l.debit) || parseFloat(l.credit)));
+    const validLines = lines.filter((l) => l.account_id && parseFloat(l.amount) > 0);
 
     let entryId = editingId;
 
     if (editingId) {
-      // تعديل قيد موجود: نحدّث بياناته الأساسية، ونستبدل كل الأسطر بالجديدة
       const { error: updErr } = await supabase
         .from("journal_entries")
         .update({ entry_date: date, description })
@@ -144,13 +182,19 @@ export default function JournalPage() {
     }
 
     await supabase.from("journal_lines").insert(
-      validLines.map((l) => ({
-        entry_id: entryId,
-        account_id: l.account_id,
-        debit: parseFloat(l.debit) || 0,
-        credit: parseFloat(l.credit) || 0,
-        description: l.description || null,
-      }))
+      validLines.map((l) => {
+        const cur = accountCurrency(l.account_id);
+        return {
+          entry_id: entryId,
+          account_id: l.account_id,
+          debit: l.side === "debit" ? parseFloat(l.amount) || 0 : 0,
+          credit: l.side === "credit" ? parseFloat(l.amount) || 0 : 0,
+          description: l.description || null,
+          currency_id: cur?.id || null,
+          fx_amount: cur ? parseFloat(l.fx_amount) || null : null,
+          exchange_rate: cur ? parseFloat(l.exchange_rate) || null : null,
+        };
+      })
     );
 
     if (post) {
@@ -197,7 +241,7 @@ export default function JournalPage() {
       <div className="flex items-center justify-between mb-6 no-print">
         <div>
           <h1 className="text-2xl font-medium">القيود المحاسبية</h1>
-          <p className="text-forest-800/60 text-sm mt-1">كل قيد يجب أن يكون متوازناً (مدين = دائن)</p>
+          <p className="text-forest-800/60 text-sm mt-1">كل قيد يجب أن يكون متوازناً بالعملة الأساسية</p>
         </div>
         <div className="flex gap-2">
           <button className="btn-secondary" onClick={() => window.print()}>طباعة</button>
@@ -243,57 +287,89 @@ export default function JournalPage() {
               <label className="text-sm text-forest-800/70 block mb-1">الوصف</label>
               <input
                 className="input"
-                placeholder="مثال: دفع إيجار شهر أغسطس"
+                placeholder="مثال: مصارفة دولار مقابل ريال"
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
               />
             </div>
           </div>
 
-          <div className="space-y-2">
-            {lines.map((l, i) => (
-              <div key={i} className="grid grid-cols-1 sm:grid-cols-5 gap-2 items-center">
-                <select
-                  className="input sm:col-span-2"
-                  value={l.account_id}
-                  onChange={(e) => updateLine(i, { account_id: e.target.value })}
-                >
-                  <option value="">اختر الحساب...</option>
-                  {accounts.map((a) => (
-                    <option key={a.id} value={a.id}>
-                      {a.code} - {a.name}
-                    </option>
-                  ))}
-                </select>
-                <input
-                  className="input"
-                  type="number"
-                  step="0.01"
-                  placeholder="مدين"
-                  value={l.debit}
-                  onChange={(e) => updateLine(i, { debit: e.target.value, credit: "" })}
-                />
-                <input
-                  className="input"
-                  type="number"
-                  step="0.01"
-                  placeholder="دائن"
-                  value={l.credit}
-                  onChange={(e) => updateLine(i, { credit: e.target.value, debit: "" })}
-                />
-                <button
-                  className="text-red-600 text-sm"
-                  onClick={() => setLines((prev) => prev.filter((_, idx) => idx !== i))}
-                  disabled={lines.length <= 2}
-                >
-                  حذف السطر
-                </button>
-              </div>
-            ))}
+          <div className="space-y-3">
+            {lines.map((l, i) => {
+              const cur = accountCurrency(l.account_id);
+              return (
+                <div key={i} className="border border-forest-100 rounded-lg p-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-6 gap-2 items-center">
+                    <select
+                      className="input sm:col-span-2"
+                      value={l.account_id}
+                      onChange={(e) => onAccountChange(i, e.target.value)}
+                    >
+                      <option value="">اختر الحساب...</option>
+                      {accounts.map((a) => (
+                        <option key={a.id} value={a.id}>
+                          {a.code} - {a.name}
+                        </option>
+                      ))}
+                    </select>
+                    <select className="input" value={l.side} onChange={(e) => updateLine(i, { side: e.target.value as "debit" | "credit" })}>
+                      <option value="debit">مدين</option>
+                      <option value="credit">دائن</option>
+                    </select>
+
+                    {!cur && (
+                      <input
+                        className="input sm:col-span-2"
+                        type="number"
+                        step="0.01"
+                        placeholder="المبلغ"
+                        value={l.amount}
+                        onChange={(e) => updateLine(i, { amount: e.target.value })}
+                      />
+                    )}
+
+                    {cur && (
+                      <>
+                        <input
+                          className="input"
+                          type="number"
+                          step="0.01"
+                          placeholder={`المبلغ بـ ${cur.code}`}
+                          value={l.fx_amount}
+                          onChange={(e) => onFxAmountChange(i, e.target.value, l.exchange_rate)}
+                          dir="ltr"
+                        />
+                        <input
+                          className="input"
+                          type="number"
+                          step="0.0001"
+                          placeholder="سعر الصرف"
+                          value={l.exchange_rate}
+                          onChange={(e) => onRateChange(i, e.target.value, l.fx_amount)}
+                        />
+                      </>
+                    )}
+
+                    <button
+                      className="text-red-600 text-sm"
+                      onClick={() => setLines((prev) => prev.filter((_, idx) => idx !== i))}
+                      disabled={lines.length <= 2}
+                    >
+                      حذف السطر
+                    </button>
+                  </div>
+                  {cur && (
+                    <p className="text-xs text-forest-800/60 mt-2">
+                      المعادل بالعملة الأساسية: <span className="font-medium">{(parseFloat(l.amount) || 0).toLocaleString("ar")}</span>
+                    </p>
+                  )}
+                </div>
+              );
+            })}
           </div>
 
           <button
-            className="text-sm text-forest-600 mt-2"
+            className="text-sm text-forest-600 mt-3"
             onClick={() => setLines((prev) => [...prev, emptyLine()])}
           >
             + إضافة سطر
@@ -331,7 +407,7 @@ export default function JournalPage() {
               <th>التاريخ</th>
               <th>الوصف</th>
               <th>الحالة</th>
-              <th>إجراءات</th>
+              <th className="no-print">إجراءات</th>
             </tr>
           </thead>
           <tbody>
@@ -345,7 +421,7 @@ export default function JournalPage() {
                     {statusLabel[e.status]}
                   </span>
                 </td>
-                <td>
+                <td className="no-print">
                   <div className="flex gap-3 text-sm">
                     {e.status === "مسودة" && (
                       <button className="text-forest-600 hover:underline" onClick={() => openEditForm(e)}>

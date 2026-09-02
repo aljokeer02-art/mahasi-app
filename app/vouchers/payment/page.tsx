@@ -7,18 +7,30 @@ import { supabase } from "@/lib/supabaseClient";
 import { exportToExcel } from "@/lib/exportExcel";
 import { exportElementToPdf } from "@/lib/exportPdf";
 
-type Account = { id: string; code: string; name: string };
+type Account = { id: string; code: string; name: string; currency_id: string | null };
+type Currency = { id: string; code: string; name: string; exchange_rate: number };
 type CashBank = { id: string; account_id: string; type: string; accounts: { code: string; name: string } };
 type Contact = { id: string; name: string };
 type Voucher = { id: string; entry_number: number; entry_date: string; description: string | null; payment_method: string | null };
 
-const emptyForm = { date: new Date().toISOString().slice(0, 10), amount: "", from_cash_bank: "", to_account: "", contact_id: "", method: "نقدي", description: "" };
+const emptyForm = {
+  date: new Date().toISOString().slice(0, 10),
+  amount: "",
+  from_cash_bank: "",
+  to_account: "",
+  contact_id: "",
+  method: "نقدي",
+  description: "",
+  fx_amount: "",
+  exchange_rate: "",
+};
 
 export default function PaymentVoucherPage() {
   const { org } = useAuth();
   const [vouchers, setVouchers] = useState<Voucher[]>([]);
   const [cashBanks, setCashBanks] = useState<CashBank[]>([]);
   const [accounts, setAccounts] = useState<Account[]>([]);
+  const [currencies, setCurrencies] = useState<Currency[]>([]);
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -28,15 +40,17 @@ export default function PaymentVoucherPage() {
 
   async function load() {
     if (!org) return;
-    const [vRes, cbRes, accRes, conRes] = await Promise.all([
+    const [vRes, cbRes, accRes, curRes, conRes] = await Promise.all([
       supabase.from("journal_entries").select("id, entry_number, entry_date, description, payment_method").eq("org_id", org.id).eq("voucher_type", "سند_صرف").is("deleted_at", null).order("entry_date", { ascending: false }),
       supabase.from("cash_bank_accounts").select("id, account_id, type, accounts(code, name)").eq("org_id", org.id),
-      supabase.from("accounts").select("id, code, name").eq("org_id", org.id).is("deleted_at", null).order("code"),
+      supabase.from("accounts").select("id, code, name, currency_id").eq("org_id", org.id).is("deleted_at", null).order("code"),
+      supabase.from("currencies").select("id, code, name, exchange_rate").eq("org_id", org.id),
       supabase.from("contacts").select("id, name").eq("org_id", org.id).is("deleted_at", null),
     ]);
     setVouchers((vRes.data as any) || []);
     setCashBanks((cbRes.data as any) || []);
     setAccounts(accRes.data || []);
+    setCurrencies(curRes.data || []);
     setContacts(conRes.data || []);
   }
 
@@ -44,6 +58,29 @@ export default function PaymentVoucherPage() {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [org]);
+
+  function destCurrency(): Currency | null {
+    const acc = accounts.find((a) => a.id === form.to_account);
+    if (!acc?.currency_id) return null;
+    return currencies.find((c) => c.id === acc.currency_id) || null;
+  }
+  const fxCurrency = destCurrency();
+
+  function onToAccountChange(accountId: string) {
+    const acc = accounts.find((a) => a.id === accountId);
+    const cur = acc?.currency_id ? currencies.find((c) => c.id === acc.currency_id) : null;
+    setForm({ ...form, to_account: accountId, exchange_rate: cur ? String(cur.exchange_rate) : "", fx_amount: "", amount: "" });
+  }
+
+  function onFxAmountChange(fxAmount: string) {
+    const amount = (parseFloat(fxAmount) || 0) * (parseFloat(form.exchange_rate) || 0);
+    setForm({ ...form, fx_amount: fxAmount, amount: amount ? String(amount) : "" });
+  }
+
+  function onRateChange(rate: string) {
+    const amount = (parseFloat(form.fx_amount) || 0) * (parseFloat(rate) || 0);
+    setForm({ ...form, exchange_rate: rate, amount: amount ? String(amount) : "" });
+  }
 
   function openNewForm() {
     setForm(emptyForm);
@@ -53,7 +90,7 @@ export default function PaymentVoucherPage() {
   }
 
   async function openEditForm(v: Voucher) {
-    const { data: entryLines } = await supabase.from("journal_lines").select("account_id, debit, credit, contact_id").eq("entry_id", v.id);
+    const { data: entryLines } = await supabase.from("journal_lines").select("account_id, debit, credit, contact_id, fx_amount, exchange_rate").eq("entry_id", v.id);
     const debitLine = (entryLines || []).find((l: any) => Number(l.debit) > 0);
     const creditLine = (entryLines || []).find((l: any) => Number(l.credit) > 0);
     const cb = cashBanks.find((c) => c.account_id === creditLine?.account_id);
@@ -65,6 +102,8 @@ export default function PaymentVoucherPage() {
       contact_id: debitLine?.contact_id || "",
       method: v.payment_method || "نقدي",
       description: v.description || "",
+      fx_amount: debitLine?.fx_amount ? String(debitLine.fx_amount) : "",
+      exchange_rate: debitLine?.exchange_rate ? String(debitLine.exchange_rate) : "",
     });
     setEditingId(v.id);
     setShowForm(true);
@@ -82,6 +121,7 @@ export default function PaymentVoucherPage() {
     }
     setBusy(true);
     const fromAccountId = cashBanks.find((c) => c.id === form.from_cash_bank)?.account_id;
+    const cur = fxCurrency;
 
     let entryId = editingId;
     if (editingId) {
@@ -97,7 +137,12 @@ export default function PaymentVoucherPage() {
     }
 
     await supabase.from("journal_lines").insert([
-      { entry_id: entryId, account_id: form.to_account, contact_id: form.contact_id || null, debit: amount, credit: 0, description: form.description },
+      {
+        entry_id: entryId, account_id: form.to_account, contact_id: form.contact_id || null, debit: amount, credit: 0, description: form.description,
+        currency_id: cur?.id || null,
+        fx_amount: cur ? parseFloat(form.fx_amount) || null : null,
+        exchange_rate: cur ? parseFloat(form.exchange_rate) || null : null,
+      },
       { entry_id: entryId, account_id: fromAccountId, contact_id: form.contact_id || null, debit: 0, credit: amount, description: form.description },
     ]);
 
@@ -121,7 +166,7 @@ export default function PaymentVoucherPage() {
       <div className="flex items-center justify-between mb-6 no-print">
         <div>
           <h1 className="text-2xl font-medium">سندات الصرف</h1>
-          <p className="text-forest-800/60 text-sm mt-1">تسجيل أي مبلغ مدفوع (نقدي، بنكي، شيك)</p>
+          <p className="text-forest-800/60 text-sm mt-1">تسجيل أي مبلغ مدفوع (نقدي، بنكي، شيك) — يدعم المصارفة بين العملات</p>
         </div>
         <div className="flex gap-2">
           <button className="btn-secondary" onClick={() => window.print()}>طباعة</button>
@@ -131,12 +176,7 @@ export default function PaymentVoucherPage() {
               exportToExcel(
                 "سندات_الصرف",
                 "سندات الصرف",
-                vouchers.map((v) => ({
-                  "رقم السند": v.entry_number,
-                  "التاريخ": v.entry_date,
-                  "الطريقة": v.payment_method || "",
-                  "البيان": v.description || "",
-                }))
+                vouchers.map((v) => ({ "رقم السند": v.entry_number, "التاريخ": v.entry_date, "الطريقة": v.payment_method || "", "البيان": v.description || "" }))
               )
             }
           >
@@ -158,10 +198,6 @@ export default function PaymentVoucherPage() {
             <input type="date" className="input" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} />
           </div>
           <div>
-            <label className="text-sm text-forest-800/70 block mb-1">المبلغ</label>
-            <input type="number" step="0.01" className="input" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} required />
-          </div>
-          <div>
             <label className="text-sm text-forest-800/70 block mb-1">طريقة الدفع</label>
             <select className="input" value={form.method} onChange={(e) => setForm({ ...form, method: e.target.value })}>
               <option value="نقدي">نقدي</option>
@@ -178,11 +214,31 @@ export default function PaymentVoucherPage() {
           </div>
           <div>
             <label className="text-sm text-forest-800/70 block mb-1">وجهة الصرف (الحساب المقابل)</label>
-            <select className="input" value={form.to_account} onChange={(e) => setForm({ ...form, to_account: e.target.value })} required>
+            <select className="input" value={form.to_account} onChange={(e) => onToAccountChange(e.target.value)} required>
               <option value="">اختر...</option>
               {accounts.map((a) => <option key={a.id} value={a.id}>{a.code} - {a.name}</option>)}
             </select>
           </div>
+
+          {!fxCurrency && (
+            <div>
+              <label className="text-sm text-forest-800/70 block mb-1">المبلغ</label>
+              <input type="number" step="0.01" className="input" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} required />
+            </div>
+          )}
+          {fxCurrency && (
+            <>
+              <div>
+                <label className="text-sm text-forest-800/70 block mb-1">المبلغ بـ {fxCurrency.code}</label>
+                <input type="number" step="0.01" className="input" value={form.fx_amount} onChange={(e) => onFxAmountChange(e.target.value)} dir="ltr" required />
+              </div>
+              <div>
+                <label className="text-sm text-forest-800/70 block mb-1">سعر الصرف</label>
+                <input type="number" step="0.0001" className="input" value={form.exchange_rate} onChange={(e) => onRateChange(e.target.value)} required />
+              </div>
+            </>
+          )}
+
           <div>
             <label className="text-sm text-forest-800/70 block mb-1">جهة الاتصال (اختياري)</label>
             <select className="input" value={form.contact_id} onChange={(e) => setForm({ ...form, contact_id: e.target.value })}>
@@ -190,6 +246,11 @@ export default function PaymentVoucherPage() {
               {contacts.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
             </select>
           </div>
+          {fxCurrency && (
+            <div className="sm:col-span-3 text-sm text-forest-800/60">
+              المعادل بالعملة الأساسية: <span className="font-medium">{(parseFloat(form.amount) || 0).toLocaleString("ar")}</span>
+            </div>
+          )}
           <div className="sm:col-span-3">
             <label className="text-sm text-forest-800/70 block mb-1">البيان</label>
             <input className="input" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} placeholder="مثال: دفع فاتورة الكهرباء" />
