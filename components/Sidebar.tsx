@@ -21,6 +21,7 @@ const links = [
   { href: "/reports/statement", label: "كشف حساب" },
   { href: "/reports/income", label: "قائمة الدخل" },
   { href: "/reports/balance-sheet", label: "الميزانية العمومية" },
+  { href: "/year-end-closing", label: "إغلاق السنة المالية" },
 ];
 
 export default function Sidebar() {

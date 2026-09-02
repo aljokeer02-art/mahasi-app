@@ -36,9 +36,10 @@ export default function ReportsPage() {
 
       const { data: lines } = await supabase
         .from("journal_lines")
-        .select("account_id, debit, credit, journal_entries!inner(status, org_id)")
+        .select("account_id, debit, credit, journal_entries!inner(status, org_id, deleted_at)")
         .eq("journal_entries.org_id", org.id)
-        .eq("journal_entries.status", "مرحل");
+        .eq("journal_entries.status", "مرحل")
+        .is("journal_entries.deleted_at", null);
 
       const totals: Record<string, { debit: number; credit: number }> = {};
       (lines || []).forEach((l: any) => {

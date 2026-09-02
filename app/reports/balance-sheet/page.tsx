@@ -30,9 +30,10 @@ export default function BalanceSheetPage() {
 
     const { data: lines } = await supabase
       .from("journal_lines")
-      .select("account_id, debit, credit, journal_entries!inner(entry_date, status, org_id)")
+      .select("account_id, debit, credit, journal_entries!inner(entry_date, status, org_id, deleted_at)")
       .eq("journal_entries.org_id", org.id)
       .eq("journal_entries.status", "مرحل")
+      .is("journal_entries.deleted_at", null)
       .lte("journal_entries.entry_date", asOfDate);
 
     const totals: Record<string, number> = {};

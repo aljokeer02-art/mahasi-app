@@ -35,8 +35,9 @@ export default function AccountStatementPage() {
 
     let query = supabase
       .from("journal_lines")
-      .select("debit, credit, description, account_id, journal_entries!inner(entry_date, entry_number, status, org_id)")
-      .eq("journal_entries.status", "مرحل");
+      .select("debit, credit, description, account_id, journal_entries!inner(entry_date, entry_number, status, org_id, deleted_at)")
+      .eq("journal_entries.status", "مرحل")
+      .is("journal_entries.deleted_at", null);
 
     if (mode === "account") {
       query = query.eq("account_id", selectedId);
