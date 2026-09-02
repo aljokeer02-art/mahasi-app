@@ -8,7 +8,6 @@ import { useAuth } from "@/contexts/AuthContext";
 const links = [
   { href: "/dashboard", label: "لوحة التحكم" },
   { href: "/accounts", label: "دليل الحسابات" },
-  { href: "/opening-balances", label: "الأرصدة الافتتاحية" },
   { href: "/contacts", label: "العملاء والموردون" },
   { href: "/journal", label: "القيود المحاسبية" },
   { href: "/vouchers/receipt", label: "سندات القبض" },
@@ -21,7 +20,6 @@ const links = [
   { href: "/reports/statement", label: "كشف حساب" },
   { href: "/reports/income", label: "قائمة الدخل" },
   { href: "/reports/balance-sheet", label: "الميزانية العمومية" },
-  { href: "/year-end-closing", label: "إغلاق السنة المالية" },
 ];
 
 export default function Sidebar() {
@@ -35,7 +33,7 @@ export default function Sidebar() {
   }
 
   return (
-    <aside className="w-64 bg-forest-900 text-forest-50 flex flex-col h-screen sticky top-0 no-print">
+    <aside className="w-64 bg-forest-900 text-forest-50 flex flex-col h-screen sticky top-0">
       <div className="p-5 border-b border-white/10">
         <div className="flex items-center gap-2">
           <div className="w-9 h-9 bg-gold rounded-lg flex items-center justify-center text-forest-900 font-bold">
