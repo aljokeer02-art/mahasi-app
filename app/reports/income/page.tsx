@@ -4,6 +4,8 @@ import { useEffect, useState } from "react";
 import AppShell from "@/components/AppShell";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/lib/supabaseClient";
+import { exportToExcel } from "@/lib/exportExcel";
+import { exportElementToPdf } from "@/lib/exportPdf";
 
 type Row = { code: string; name: string; amount: number };
 
@@ -28,9 +30,10 @@ export default function IncomeStatementPage() {
 
     const { data: lines } = await supabase
       .from("journal_lines")
-      .select("account_id, debit, credit, journal_entries!inner(entry_date, status, org_id)")
+      .select("account_id, debit, credit, journal_entries!inner(entry_date, status, org_id, deleted_at)")
       .eq("journal_entries.org_id", org.id)
       .eq("journal_entries.status", "مرحل")
+      .is("journal_entries.deleted_at", null)
       .gte("journal_entries.entry_date", fromDate)
       .lte("journal_entries.entry_date", toDate);
 
@@ -64,12 +67,32 @@ export default function IncomeStatementPage() {
 
   return (
     <AppShell>
-      <div className="mb-6">
-        <h1 className="text-2xl font-medium">قائمة الدخل</h1>
-        <p className="text-forest-800/60 text-sm mt-1">الإيرادات والمصروفات وصافي الدخل خلال فترة</p>
+      <div className="mb-6 no-print flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-medium">قائمة الدخل</h1>
+          <p className="text-forest-800/60 text-sm mt-1">الإيرادات والمصروفات وصافي الدخل خلال فترة</p>
+        </div>
+        <div className="flex gap-2">
+          <button className="btn-secondary" onClick={() => window.print()}>طباعة</button>
+          <button
+            className="btn-secondary"
+            onClick={() =>
+              exportToExcel("قائمة_الدخل", "قائمة الدخل", [
+                ...revenue.map((r) => ({ "البند": r.name, "النوع": "إيراد", "المبلغ": r.amount })),
+                ...expenses.map((r) => ({ "البند": r.name, "النوع": "مصروف", "المبلغ": r.amount })),
+                { "البند": "صافي الدخل", "النوع": "", "المبلغ": netIncome },
+              ])
+            }
+          >
+            تصدير Excel
+          </button>
+          <button className="btn-secondary" onClick={() => exportElementToPdf("income-statement-table", "قائمة_الدخل")}>
+            تصدير PDF
+          </button>
+        </div>
       </div>
 
-      <div className="card p-5 mb-6 flex flex-wrap gap-3 items-end">
+      <div className="card p-5 mb-6 flex flex-wrap gap-3 items-end no-print">
         <div>
           <label className="text-sm text-forest-800/70 block mb-1">من تاريخ</label>
           <input type="date" className="input" value={fromDate} onChange={(e) => setFromDate(e.target.value)} />
@@ -84,7 +107,7 @@ export default function IncomeStatementPage() {
       {loading ? (
         <p className="text-forest-800/50 text-center py-8">جارِ التحميل...</p>
       ) : (
-        <div className="space-y-6">
+        <div className="space-y-6" id="income-statement-table">
           <div className="card overflow-hidden">
             <div className="px-4 py-3 bg-forest-50 font-medium">الإيرادات</div>
             <table className="w-full table-base">

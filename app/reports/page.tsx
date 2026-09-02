@@ -4,6 +4,8 @@ import { useEffect, useState } from "react";
 import AppShell from "@/components/AppShell";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/lib/supabaseClient";
+import { exportToExcel } from "@/lib/exportExcel";
+import { exportElementToPdf } from "@/lib/exportPdf";
 
 type Row = {
   id: string;
@@ -34,9 +36,10 @@ export default function ReportsPage() {
 
       const { data: lines } = await supabase
         .from("journal_lines")
-        .select("account_id, debit, credit, journal_entries!inner(status, org_id)")
+        .select("account_id, debit, credit, journal_entries!inner(status, org_id, deleted_at)")
         .eq("journal_entries.org_id", org.id)
-        .eq("journal_entries.status", "مرحل");
+        .eq("journal_entries.status", "مرحل")
+        .is("journal_entries.deleted_at", null);
 
       const totals: Record<string, { debit: number; credit: number }> = {};
       (lines || []).forEach((l: any) => {
@@ -70,12 +73,39 @@ export default function ReportsPage() {
 
   return (
     <AppShell>
-      <div className="mb-6">
-        <h1 className="text-2xl font-medium">التقارير</h1>
-        <p className="text-forest-800/60 text-sm mt-1">ميزان المراجعة — يشمل القيود المرحّلة فقط</p>
+      <div className="mb-6 no-print flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-medium">التقارير</h1>
+          <p className="text-forest-800/60 text-sm mt-1">ميزان المراجعة — يشمل القيود المرحّلة فقط</p>
+        </div>
+        <div className="flex gap-2">
+          <button className="btn-secondary" onClick={() => window.print()}>طباعة</button>
+          <button
+            className="btn-secondary"
+            onClick={() =>
+              exportToExcel(
+                "ميزان_المراجعة",
+                "ميزان المراجعة",
+                rows.map((r) => ({
+                  "الرقم": r.code,
+                  "الحساب": r.name,
+                  "الرصيد الافتتاحي": r.opening,
+                  "مدين": r.debit,
+                  "دائن": r.credit,
+                  "الرصيد الحالي": r.balance,
+                }))
+              )
+            }
+          >
+            تصدير Excel
+          </button>
+          <button className="btn-secondary" onClick={() => exportElementToPdf("trial-balance-table", "ميزان_المراجعة")}>
+            تصدير PDF
+          </button>
+        </div>
       </div>
 
-      <div className="card overflow-hidden">
+      <div id="trial-balance-table" className="card overflow-hidden">
         <table className="w-full table-base">
           <thead>
             <tr>

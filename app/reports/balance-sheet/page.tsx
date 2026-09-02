@@ -4,6 +4,8 @@ import { useEffect, useState } from "react";
 import AppShell from "@/components/AppShell";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/lib/supabaseClient";
+import { exportToExcel } from "@/lib/exportExcel";
+import { exportElementToPdf } from "@/lib/exportPdf";
 
 type Row = { code: string; name: string; amount: number };
 
@@ -28,9 +30,10 @@ export default function BalanceSheetPage() {
 
     const { data: lines } = await supabase
       .from("journal_lines")
-      .select("account_id, debit, credit, journal_entries!inner(entry_date, status, org_id)")
+      .select("account_id, debit, credit, journal_entries!inner(entry_date, status, org_id, deleted_at)")
       .eq("journal_entries.org_id", org.id)
       .eq("journal_entries.status", "مرحل")
+      .is("journal_entries.deleted_at", null)
       .lte("journal_entries.entry_date", asOfDate);
 
     const totals: Record<string, number> = {};
@@ -67,12 +70,32 @@ export default function BalanceSheetPage() {
 
   return (
     <AppShell>
-      <div className="mb-6">
-        <h1 className="text-2xl font-medium">الميزانية العمومية</h1>
-        <p className="text-forest-800/60 text-sm mt-1">الأصول والخصوم وحقوق الملكية في لحظة معينة</p>
+      <div className="mb-6 no-print flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-medium">الميزانية العمومية</h1>
+          <p className="text-forest-800/60 text-sm mt-1">الأصول والخصوم وحقوق الملكية في لحظة معينة</p>
+        </div>
+        <div className="flex gap-2">
+          <button className="btn-secondary" onClick={() => window.print()}>طباعة</button>
+          <button
+            className="btn-secondary"
+            onClick={() =>
+              exportToExcel("الميزانية_العمومية", "الميزانية", [
+                ...assets.map((r) => ({ "البند": r.name, "النوع": "أصل", "المبلغ": r.amount })),
+                ...liabilities.map((r) => ({ "البند": r.name, "النوع": "خصم", "المبلغ": r.amount })),
+                ...equity.map((r) => ({ "البند": r.name, "النوع": "حقوق ملكية", "المبلغ": r.amount })),
+              ])
+            }
+          >
+            تصدير Excel
+          </button>
+          <button className="btn-secondary" onClick={() => exportElementToPdf("balance-sheet-table", "الميزانية_العمومية")}>
+            تصدير PDF
+          </button>
+        </div>
       </div>
 
-      <div className="card p-5 mb-6 flex flex-wrap gap-3 items-end">
+      <div className="card p-5 mb-6 flex flex-wrap gap-3 items-end no-print">
         <div>
           <label className="text-sm text-forest-800/70 block mb-1">كما في تاريخ</label>
           <input type="date" className="input" value={asOfDate} onChange={(e) => setAsOfDate(e.target.value)} />
@@ -83,7 +106,7 @@ export default function BalanceSheetPage() {
       {loading ? (
         <p className="text-forest-800/50 text-center py-8">جارِ التحميل...</p>
       ) : (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6" id="balance-sheet-table">
           <div className="card overflow-hidden">
             <div className="px-4 py-3 bg-forest-50 font-medium">الأصول</div>
             <table className="w-full table-base">
