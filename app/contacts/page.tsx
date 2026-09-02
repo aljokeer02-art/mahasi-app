@@ -13,11 +13,14 @@ const types = [
   { value: "كلاهما", label: "كلاهما" },
 ];
 
+const emptyForm = { name: "", type: "عميل", phone: "", email: "" };
+
 export default function ContactsPage() {
   const { org } = useAuth();
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [showForm, setShowForm] = useState(false);
-  const [form, setForm] = useState({ name: "", type: "عميل", phone: "", email: "" });
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [form, setForm] = useState(emptyForm);
   const [busy, setBusy] = useState(false);
 
   async function load() {
@@ -36,31 +39,57 @@ export default function ContactsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [org]);
 
-  async function addContact(e: React.FormEvent) {
+  function openNewForm() {
+    setForm(emptyForm);
+    setEditingId(null);
+    setShowForm(true);
+  }
+
+  function openEditForm(c: Contact) {
+    setForm({ name: c.name, type: c.type, phone: c.phone || "", email: c.email || "" });
+    setEditingId(c.id);
+    setShowForm(true);
+  }
+
+  async function saveContact(e: React.FormEvent) {
     e.preventDefault();
     if (!org) return;
     setBusy(true);
-    await supabase.from("contacts").insert({ org_id: org.id, ...form });
-    setForm({ name: "", type: "عميل", phone: "", email: "" });
+    if (editingId) {
+      await supabase.from("contacts").update(form).eq("id", editingId);
+    } else {
+      await supabase.from("contacts").insert({ org_id: org.id, ...form });
+    }
+    setForm(emptyForm);
+    setEditingId(null);
     setShowForm(false);
     setBusy(false);
     load();
   }
 
+  async function deleteContact(id: string) {
+    if (!confirm("حذف هذه الجهة؟")) return;
+    await supabase.from("contacts").update({ deleted_at: new Date().toISOString() }).eq("id", id);
+    load();
+  }
+
   return (
     <AppShell>
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex items-center justify-between mb-6 no-print">
         <div>
           <h1 className="text-2xl font-medium">العملاء والموردون</h1>
           <p className="text-forest-800/60 text-sm mt-1">إدارة جهات الاتصال المرتبطة بالحسابات</p>
         </div>
-        <button className="btn-primary" onClick={() => setShowForm((s) => !s)}>
-          {showForm ? "إلغاء" : "+ جهة جديدة"}
-        </button>
+        <div className="flex gap-2">
+          <button className="btn-secondary" onClick={() => window.print()}>طباعة</button>
+          <button className="btn-primary" onClick={() => (showForm ? setShowForm(false) : openNewForm())}>
+            {showForm ? "إلغاء" : "+ جهة جديدة"}
+          </button>
+        </div>
       </div>
 
       {showForm && (
-        <form onSubmit={addContact} className="card p-5 mb-6 grid grid-cols-1 sm:grid-cols-4 gap-3">
+        <form onSubmit={saveContact} className="card p-5 mb-6 grid grid-cols-1 sm:grid-cols-4 gap-3 no-print">
           <input
             className="input sm:col-span-1"
             placeholder="الاسم"
@@ -74,9 +103,7 @@ export default function ContactsPage() {
             onChange={(e) => setForm({ ...form, type: e.target.value })}
           >
             {types.map((t) => (
-              <option key={t.value} value={t.value}>
-                {t.label}
-              </option>
+              <option key={t.value} value={t.value}>{t.label}</option>
             ))}
           </select>
           <input
@@ -94,7 +121,7 @@ export default function ContactsPage() {
             dir="ltr"
           />
           <button type="submit" disabled={busy} className="btn-primary sm:col-span-1">
-            {busy ? "جارِ الحفظ..." : "حفظ"}
+            {busy ? "جارِ الحفظ..." : editingId ? "حفظ التعديل" : "حفظ"}
           </button>
         </form>
       )}
@@ -107,6 +134,7 @@ export default function ContactsPage() {
               <th>النوع</th>
               <th>الجوال</th>
               <th>البريد</th>
+              <th className="no-print">إجراءات</th>
             </tr>
           </thead>
           <tbody>
@@ -116,11 +144,17 @@ export default function ContactsPage() {
                 <td>{c.type}</td>
                 <td dir="ltr" className="text-left">{c.phone || "—"}</td>
                 <td dir="ltr" className="text-left">{c.email || "—"}</td>
+                <td className="no-print">
+                  <div className="flex gap-3 text-sm">
+                    <button className="text-forest-600 hover:underline" onClick={() => openEditForm(c)}>تعديل</button>
+                    <button className="text-red-600 hover:underline" onClick={() => deleteContact(c.id)}>حذف</button>
+                  </div>
+                </td>
               </tr>
             ))}
             {contacts.length === 0 && (
               <tr>
-                <td colSpan={4} className="text-center py-8 text-forest-800/50">
+                <td colSpan={5} className="text-center py-8 text-forest-800/50">
                   لا توجد جهات اتصال بعد.
                 </td>
               </tr>

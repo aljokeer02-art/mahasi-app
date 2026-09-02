@@ -30,10 +30,9 @@ export default function IncomeStatementPage() {
 
     const { data: lines } = await supabase
       .from("journal_lines")
-      .select("account_id, debit, credit, journal_entries!inner(entry_date, status, org_id, deleted_at)")
+      .select("account_id, debit, credit, journal_entries!inner(entry_date, status, org_id)")
       .eq("journal_entries.org_id", org.id)
       .eq("journal_entries.status", "مرحل")
-      .is("journal_entries.deleted_at", null)
       .gte("journal_entries.entry_date", fromDate)
       .lte("journal_entries.entry_date", toDate);
 

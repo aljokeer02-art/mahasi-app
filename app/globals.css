@@ -28,3 +28,15 @@
 .table-base td {
   @apply text-right text-sm px-4 py-3 border-b border-forest-50;
 }
+
+@media print {
+  .no-print {
+    display: none !important;
+  }
+  main {
+    padding: 0 !important;
+  }
+  body {
+    background: white !important;
+  }
+}
