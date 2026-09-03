@@ -22,13 +22,14 @@ type Line = {
   id?: string;
   account_id: string;
   side: "debit" | "credit";
-  amount: string; // بالعملة الأساسية دائماً — هذا ما يدخل في التوازن
-  fx_amount: string; // المبلغ بعملة الحساب الأجنبية (إن وجدت)
+  currency_id: string; // فارغ = العملة الأساسية
+  fx_amount: string; // المبلغ بعملة السطر (عند اختيار عملة غير أساسية)
   exchange_rate: string;
+  amount: string; // المعادل بالعملة الأساسية — هذا ما يدخل في التوازن
   description: string;
 };
 
-const emptyLine = (): Line => ({ account_id: "", side: "debit", amount: "", fx_amount: "", exchange_rate: "", description: "" });
+const emptyLine = (): Line => ({ account_id: "", side: "debit", currency_id: "", fx_amount: "", exchange_rate: "", amount: "", description: "" });
 
 export default function JournalPage() {
   const { org } = useAuth();
@@ -65,12 +66,6 @@ export default function JournalPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [org]);
 
-  function accountCurrency(accountId: string): Currency | null {
-    const acc = accounts.find((a) => a.id === accountId);
-    if (!acc?.currency_id) return null;
-    return currencies.find((c) => c.id === acc.currency_id) || null;
-  }
-
   const totalDebit = lines.reduce((s, l) => s + (l.side === "debit" ? parseFloat(l.amount) || 0 : 0), 0);
   const totalCredit = lines.reduce((s, l) => s + (l.side === "credit" ? parseFloat(l.amount) || 0 : 0), 0);
   const balanced = totalDebit === totalCredit && totalDebit > 0;
@@ -80,12 +75,21 @@ export default function JournalPage() {
   }
 
   function onAccountChange(i: number, accountId: string) {
-    const cur = accountCurrency(accountId);
-    if (cur) {
-      updateLine(i, { account_id: accountId, exchange_rate: String(cur.exchange_rate), fx_amount: "", amount: "" });
-    } else {
-      updateLine(i, { account_id: accountId, exchange_rate: "", fx_amount: "", amount: "" });
-    }
+    // نقترح عملة الحساب تلقائياً كبداية، لكن يمكن تغييرها بحرية بعد ذلك
+    const acc = accounts.find((a) => a.id === accountId);
+    const cur = acc?.currency_id ? currencies.find((c) => c.id === acc.currency_id) : null;
+    updateLine(i, {
+      account_id: accountId,
+      currency_id: cur?.id || "",
+      exchange_rate: cur ? String(cur.exchange_rate) : "",
+      fx_amount: "",
+      amount: "",
+    });
+  }
+
+  function onCurrencyChange(i: number, currencyId: string) {
+    const cur = currencies.find((c) => c.id === currencyId);
+    updateLine(i, { currency_id: currencyId, exchange_rate: cur ? String(cur.exchange_rate) : "", fx_amount: "", amount: "" });
   }
 
   function onFxAmountChange(i: number, fxAmount: string, rate: string) {
@@ -116,7 +120,7 @@ export default function JournalPage() {
     setError("");
     const { data: entryLines } = await supabase
       .from("journal_lines")
-      .select("id, account_id, debit, credit, description, fx_amount, exchange_rate")
+      .select("id, account_id, debit, credit, description, currency_id, fx_amount, exchange_rate")
       .eq("entry_id", entry.id);
 
     setEditingId(entry.id);
@@ -127,9 +131,10 @@ export default function JournalPage() {
         id: l.id,
         account_id: l.account_id,
         side: Number(l.debit) > 0 ? "debit" : "credit",
-        amount: String(Number(l.debit) > 0 ? l.debit : l.credit),
+        currency_id: l.currency_id || "",
         fx_amount: l.fx_amount ? String(l.fx_amount) : "",
         exchange_rate: l.exchange_rate ? String(l.exchange_rate) : "",
+        amount: String(Number(l.debit) > 0 ? l.debit : l.credit),
         description: l.description || "",
       }))
     );
@@ -140,7 +145,7 @@ export default function JournalPage() {
     if (!org) return;
     setError("");
     if (post && !balanced) {
-      setError("لا يمكن ترحيل القيد: مجموع المدين يجب أن يساوي مجموع الدائن");
+      setError("لا يمكن ترحيل القيد: مجموع المدين يجب أن يساوي مجموع الدائن بالعملة الأساسية");
       return;
     }
     setBusy(true);
@@ -182,19 +187,16 @@ export default function JournalPage() {
     }
 
     await supabase.from("journal_lines").insert(
-      validLines.map((l) => {
-        const cur = accountCurrency(l.account_id);
-        return {
-          entry_id: entryId,
-          account_id: l.account_id,
-          debit: l.side === "debit" ? parseFloat(l.amount) || 0 : 0,
-          credit: l.side === "credit" ? parseFloat(l.amount) || 0 : 0,
-          description: l.description || null,
-          currency_id: cur?.id || null,
-          fx_amount: cur ? parseFloat(l.fx_amount) || null : null,
-          exchange_rate: cur ? parseFloat(l.exchange_rate) || null : null,
-        };
-      })
+      validLines.map((l) => ({
+        entry_id: entryId,
+        account_id: l.account_id,
+        debit: l.side === "debit" ? parseFloat(l.amount) || 0 : 0,
+        credit: l.side === "credit" ? parseFloat(l.amount) || 0 : 0,
+        description: l.description || null,
+        currency_id: l.currency_id || null,
+        fx_amount: l.currency_id ? parseFloat(l.fx_amount) || null : null,
+        exchange_rate: l.currency_id ? parseFloat(l.exchange_rate) || null : null,
+      }))
     );
 
     if (post) {
@@ -241,7 +243,7 @@ export default function JournalPage() {
       <div className="flex items-center justify-between mb-6 no-print">
         <div>
           <h1 className="text-2xl font-medium">القيود المحاسبية</h1>
-          <p className="text-forest-800/60 text-sm mt-1">كل قيد يجب أن يكون متوازناً بالعملة الأساسية</p>
+          <p className="text-forest-800/60 text-sm mt-1">كل طرف يمكن أن يكون بعملة مختلفة — التوازن يُحسب بالعملة الأساسية</p>
         </div>
         <div className="flex gap-2">
           <button className="btn-secondary" onClick={() => window.print()}>طباعة</button>
@@ -287,7 +289,7 @@ export default function JournalPage() {
               <label className="text-sm text-forest-800/70 block mb-1">الوصف</label>
               <input
                 className="input"
-                placeholder="مثال: مصارفة دولار مقابل ريال"
+                placeholder="مثال: مصارفة ريال سعودي مقابل ريال يمني"
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
               />
@@ -295,77 +297,79 @@ export default function JournalPage() {
           </div>
 
           <div className="space-y-3">
-            {lines.map((l, i) => {
-              const cur = accountCurrency(l.account_id);
-              return (
-                <div key={i} className="border border-forest-100 rounded-lg p-3">
-                  <div className="grid grid-cols-1 sm:grid-cols-6 gap-2 items-center">
-                    <select
-                      className="input sm:col-span-2"
-                      value={l.account_id}
-                      onChange={(e) => onAccountChange(i, e.target.value)}
-                    >
-                      <option value="">اختر الحساب...</option>
-                      {accounts.map((a) => (
-                        <option key={a.id} value={a.id}>
-                          {a.code} - {a.name}
-                        </option>
-                      ))}
-                    </select>
-                    <select className="input" value={l.side} onChange={(e) => updateLine(i, { side: e.target.value as "debit" | "credit" })}>
-                      <option value="debit">مدين</option>
-                      <option value="credit">دائن</option>
-                    </select>
+            {lines.map((l, i) => (
+              <div key={i} className="border border-forest-100 rounded-lg p-3">
+                <div className="grid grid-cols-1 sm:grid-cols-6 gap-2 items-center">
+                  <select
+                    className="input sm:col-span-2"
+                    value={l.account_id}
+                    onChange={(e) => onAccountChange(i, e.target.value)}
+                  >
+                    <option value="">اختر الحساب...</option>
+                    {accounts.map((a) => (
+                      <option key={a.id} value={a.id}>
+                        {a.code} - {a.name}
+                      </option>
+                    ))}
+                  </select>
+                  <select className="input" value={l.side} onChange={(e) => updateLine(i, { side: e.target.value as "debit" | "credit" })}>
+                    <option value="debit">مدين</option>
+                    <option value="credit">دائن</option>
+                  </select>
+                  <select className="input" value={l.currency_id} onChange={(e) => onCurrencyChange(i, e.target.value)}>
+                    <option value="">العملة الأساسية</option>
+                    {currencies.map((c) => (
+                      <option key={c.id} value={c.id}>{c.code} - {c.name}</option>
+                    ))}
+                  </select>
 
-                    {!cur && (
+                  {!l.currency_id && (
+                    <input
+                      className="input sm:col-span-2"
+                      type="number"
+                      step="0.01"
+                      placeholder="المبلغ"
+                      value={l.amount}
+                      onChange={(e) => updateLine(i, { amount: e.target.value })}
+                    />
+                  )}
+                  {l.currency_id && (
+                    <>
                       <input
-                        className="input sm:col-span-2"
+                        className="input"
                         type="number"
                         step="0.01"
-                        placeholder="المبلغ"
-                        value={l.amount}
-                        onChange={(e) => updateLine(i, { amount: e.target.value })}
+                        placeholder="المبلغ بعملة السطر"
+                        value={l.fx_amount}
+                        onChange={(e) => onFxAmountChange(i, e.target.value, l.exchange_rate)}
+                        dir="ltr"
                       />
-                    )}
-
-                    {cur && (
-                      <>
-                        <input
-                          className="input"
-                          type="number"
-                          step="0.01"
-                          placeholder={`المبلغ بـ ${cur.code}`}
-                          value={l.fx_amount}
-                          onChange={(e) => onFxAmountChange(i, e.target.value, l.exchange_rate)}
-                          dir="ltr"
-                        />
-                        <input
-                          className="input"
-                          type="number"
-                          step="0.0001"
-                          placeholder="سعر الصرف"
-                          value={l.exchange_rate}
-                          onChange={(e) => onRateChange(i, e.target.value, l.fx_amount)}
-                        />
-                      </>
-                    )}
-
-                    <button
-                      className="text-red-600 text-sm"
-                      onClick={() => setLines((prev) => prev.filter((_, idx) => idx !== i))}
-                      disabled={lines.length <= 2}
-                    >
-                      حذف السطر
-                    </button>
-                  </div>
-                  {cur && (
-                    <p className="text-xs text-forest-800/60 mt-2">
-                      المعادل بالعملة الأساسية: <span className="font-medium">{(parseFloat(l.amount) || 0).toLocaleString("ar")}</span>
-                    </p>
+                      <input
+                        className="input"
+                        type="number"
+                        step="0.0001"
+                        placeholder="سعر الصرف"
+                        value={l.exchange_rate}
+                        onChange={(e) => onRateChange(i, e.target.value, l.fx_amount)}
+                      />
+                    </>
                   )}
+
+                  <button
+                    className="text-red-600 text-sm"
+                    onClick={() => setLines((prev) => prev.filter((_, idx) => idx !== i))}
+                    disabled={lines.length <= 2}
+                  >
+                    حذف السطر
+                  </button>
                 </div>
-              );
-            })}
+                {l.currency_id && (
+                  <p className="text-xs text-forest-800/60 mt-2">
+                    المعادل بالعملة الأساسية: <span className="font-medium">{(parseFloat(l.amount) || 0).toLocaleString("ar")}</span>
+                  </p>
+                )}
+              </div>
+            ))}
           </div>
 
           <button
