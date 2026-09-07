@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 
 export default function LoginPage() {
-  const [mode, setMode] = useState<"login" | "signup">("login");
+  const [mode, setMode] = useState<"login" | "signup" | "forgot">("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [fullName, setFullName] = useState("");
@@ -24,7 +24,7 @@ export default function LoginPage() {
       const { error } = await supabase.auth.signInWithPassword({ email, password });
       if (error) setError(translateError(error.message));
       else router.replace("/");
-    } else {
+    } else if (mode === "signup") {
       if (password.length < 6) {
         setError("كلمة المرور يجب أن تكون 6 أحرف على الأقل");
         setBusy(false);
@@ -37,6 +37,12 @@ export default function LoginPage() {
       });
       if (error) setError(translateError(error.message));
       else setNotice("تم إنشاء الحساب! يمكنك الآن تسجيل الدخول مباشرة.");
+    } else {
+      const { error } = await supabase.auth.resetPasswordForEmail(email, {
+        redirectTo: `${window.location.origin}/reset-password`,
+      });
+      if (error) setError(translateError(error.message));
+      else setNotice("أُرسل رابط لتعيين كلمة مرور جديدة إلى بريدك. افتحه واتبع التعليمات.");
     }
     setBusy(false);
   }
@@ -59,24 +65,36 @@ export default function LoginPage() {
         </div>
 
         <div className="card p-6">
-          <div className="flex gap-2 mb-6 bg-forest-50 rounded-lg p-1">
-            <button
-              onClick={() => setMode("login")}
-              className={`flex-1 py-2 rounded-md text-sm transition-colors ${
-                mode === "login" ? "bg-white shadow-sm font-medium" : "text-forest-800/60"
-              }`}
-            >
-              تسجيل الدخول
-            </button>
-            <button
-              onClick={() => setMode("signup")}
-              className={`flex-1 py-2 rounded-md text-sm transition-colors ${
-                mode === "signup" ? "bg-white shadow-sm font-medium" : "text-forest-800/60"
-              }`}
-            >
-              حساب جديد
-            </button>
-          </div>
+          {mode !== "forgot" && (
+            <div className="flex gap-2 mb-6 bg-forest-50 rounded-lg p-1">
+              <button
+                onClick={() => { setMode("login"); setError(""); setNotice(""); }}
+                className={`flex-1 py-2 rounded-md text-sm transition-colors ${
+                  mode === "login" ? "bg-white shadow-sm font-medium" : "text-forest-800/60"
+                }`}
+              >
+                تسجيل الدخول
+              </button>
+              <button
+                onClick={() => { setMode("signup"); setError(""); setNotice(""); }}
+                className={`flex-1 py-2 rounded-md text-sm transition-colors ${
+                  mode === "signup" ? "bg-white shadow-sm font-medium" : "text-forest-800/60"
+                }`}
+              >
+                حساب جديد
+              </button>
+            </div>
+          )}
+
+          {mode === "forgot" && (
+            <div className="mb-4">
+              <button onClick={() => { setMode("login"); setError(""); setNotice(""); }} className="text-sm text-forest-600">
+                ← الرجوع لتسجيل الدخول
+              </button>
+              <h2 className="font-medium mt-2">إعادة تعيين كلمة المرور</h2>
+              <p className="text-sm text-forest-800/60">أدخل بريدك وسنرسل لك رابط تعيين كلمة مرور جديدة.</p>
+            </div>
+          )}
 
           <form onSubmit={handleSubmit} className="space-y-3">
             {mode === "signup" && (
@@ -101,23 +119,41 @@ export default function LoginPage() {
                 dir="ltr"
               />
             </div>
-            <div>
-              <label className="text-sm text-forest-800/70 block mb-1">كلمة المرور</label>
-              <input
-                type="password"
-                className="input"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                required
-                dir="ltr"
-              />
-            </div>
+            {mode !== "forgot" && (
+              <div>
+                <label className="text-sm text-forest-800/70 block mb-1">كلمة المرور</label>
+                <input
+                  type="password"
+                  className="input"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  required
+                  dir="ltr"
+                />
+              </div>
+            )}
+
+            {mode === "login" && (
+              <button
+                type="button"
+                onClick={() => { setMode("forgot"); setError(""); setNotice(""); }}
+                className="text-sm text-forest-600 block"
+              >
+                نسيت كلمة المرور؟
+              </button>
+            )}
 
             {error && <p className="text-red-600 text-sm">{error}</p>}
             {notice && <p className="text-forest-600 text-sm">{notice}</p>}
 
             <button type="submit" disabled={busy} className="btn-primary w-full mt-2">
-              {busy ? "جارِ التنفيذ..." : mode === "login" ? "دخول" : "إنشاء حساب"}
+              {busy
+                ? "جارِ التنفيذ..."
+                : mode === "login"
+                ? "دخول"
+                : mode === "signup"
+                ? "إنشاء حساب"
+                : "إرسال رابط إعادة التعيين"}
             </button>
           </form>
         </div>

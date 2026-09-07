@@ -5,15 +5,9 @@ import AppShell from "@/components/AppShell";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/lib/supabaseClient";
 
-type Account = {
-  id: string;
-  code: string;
-  name: string;
-  category: string;
-  opening_balance: number;
-  currency_id: string | null;
-};
+type Account = { id: string; code: string; name: string; category: string };
 type Currency = { id: string; code: string; name: string };
+type Balance = { id: string; account_id: string; currency_id: string | null; opening_balance: number };
 
 const categoryLabels: Record<string, string> = {
   اصول: "الأصول",
@@ -22,15 +16,15 @@ const categoryLabels: Record<string, string> = {
   ايرادات: "الإيرادات",
   مصروفات: "المصروفات",
 };
-
 const categoryOrder = ["اصول", "خصوم", "حقوق_ملكية", "ايرادات", "مصروفات"];
 
 export default function OpeningBalancesPage() {
   const { org } = useAuth();
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [currencies, setCurrencies] = useState<Currency[]>([]);
-  const [amountEdits, setAmountEdits] = useState<Record<string, string>>({});
-  const [currencyEdits, setCurrencyEdits] = useState<Record<string, string>>({});
+  const [balances, setBalances] = useState<Balance[]>([]);
+  const [edits, setEdits] = useState<Record<string, string>>({}); // key = balance.id
+  const [newCurrencyPick, setNewCurrencyPick] = useState<Record<string, string>>({}); // key = account.id
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
@@ -38,19 +32,16 @@ export default function OpeningBalancesPage() {
   async function load() {
     if (!org) return;
     setLoading(true);
-    const [accRes, curRes] = await Promise.all([
-      supabase
-        .from("accounts")
-        .select("id, code, name, category, opening_balance, currency_id")
-        .eq("org_id", org.id)
-        .is("deleted_at", null)
-        .order("code"),
+    const [accRes, curRes, balRes] = await Promise.all([
+      supabase.from("accounts").select("id, code, name, category").eq("org_id", org.id).is("deleted_at", null).order("code"),
       supabase.from("currencies").select("id, code, name").eq("org_id", org.id),
+      supabase.from("account_balances").select("id, account_id, currency_id, opening_balance").eq("org_id", org.id),
     ]);
     setAccounts(accRes.data || []);
     setCurrencies(curRes.data || []);
-    setAmountEdits({});
-    setCurrencyEdits({});
+    setBalances(balRes.data || []);
+    setEdits({});
+    setNewCurrencyPick({});
     setLoading(false);
   }
 
@@ -59,43 +50,63 @@ export default function OpeningBalancesPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [org]);
 
-  function amountFor(a: Account) {
-    return amountEdits[a.id] !== undefined ? amountEdits[a.id] : String(a.opening_balance);
-  }
-  function currencyFor(a: Account) {
-    return currencyEdits[a.id] !== undefined ? currencyEdits[a.id] : a.currency_id || "";
+  function valueFor(b: Balance) {
+    return edits[b.id] !== undefined ? edits[b.id] : String(b.opening_balance);
   }
 
-  const changedIds = Array.from(new Set([...Object.keys(amountEdits), ...Object.keys(currencyEdits)])).filter((id) => {
-    const acc = accounts.find((a) => a.id === id);
-    if (!acc) return false;
-    const amountChanged = amountEdits[id] !== undefined && parseFloat(amountEdits[id] || "0") !== Number(acc.opening_balance);
-    const currencyChanged = currencyEdits[id] !== undefined && (currencyEdits[id] || null) !== acc.currency_id;
-    return amountChanged || currencyChanged;
+  const changedIds = Object.keys(edits).filter((id) => {
+    const b = balances.find((x) => x.id === id);
+    return b && parseFloat(edits[id] || "0") !== Number(b.opening_balance);
   });
 
   async function saveAll() {
     setSaving(true);
     setMessage("");
     for (const id of changedIds) {
-      const acc = accounts.find((a) => a.id === id)!;
-      await supabase
-        .from("accounts")
-        .update({
-          opening_balance: parseFloat(amountFor(acc) || "0"),
-          currency_id: currencyFor(acc) || null,
-        })
-        .eq("id", id);
+      await supabase.from("account_balances").update({ opening_balance: parseFloat(edits[id] || "0") }).eq("id", id);
     }
-    setMessage(`تم حفظ ${changedIds.length} حساب بنجاح`);
+    setMessage(`تم حفظ ${changedIds.length} سطر بنجاح`);
     setSaving(false);
     load();
   }
 
+  async function addCurrencyRow(accountId: string) {
+    if (!org) return;
+    const currencyId = newCurrencyPick[accountId];
+    const alreadyExists = balances.some((b) => b.account_id === accountId && (b.currency_id || "") === (currencyId || ""));
+    if (alreadyExists) {
+      alert("هذه العملة مضافة بالفعل لهذا الحساب.");
+      return;
+    }
+    await supabase.from("account_balances").insert({
+      org_id: org.id,
+      account_id: accountId,
+      currency_id: currencyId || null,
+      opening_balance: 0,
+    });
+    setNewCurrencyPick((prev) => ({ ...prev, [accountId]: "" }));
+    load();
+  }
+
+  async function removeCurrencyRow(balanceId: string) {
+    if (!confirm("حذف رصيد هذه العملة من الحساب؟")) return;
+    await supabase.from("account_balances").delete().eq("id", balanceId);
+    load();
+  }
+
+  function currencyLabel(id: string | null) {
+    if (!id) return "الأساسية";
+    return currencies.find((c) => c.id === id)?.code || "—";
+  }
+
   function totalFor(category: string) {
+    // نجمع فقط أرصدة العملة الأساسية للتحقق من التوازن (الأصول = الخصوم + حقوق الملكية)
     return accounts
       .filter((a) => a.category === category)
-      .reduce((sum, a) => sum + parseFloat(amountFor(a) || "0"), 0);
+      .reduce((sum, a) => {
+        const baseBalance = balances.find((b) => b.account_id === a.id && b.currency_id === null);
+        return sum + (baseBalance ? parseFloat(valueFor(baseBalance) || "0") : 0);
+      }, 0);
   }
 
   const totalAssets = totalFor("اصول");
@@ -109,7 +120,7 @@ export default function OpeningBalancesPage() {
         <div>
           <h1 className="text-2xl font-medium">الأرصدة الافتتاحية</h1>
           <p className="text-forest-800/60 text-sm mt-1">
-            حدّد رصيد كل حساب وعملته قبل بدء استخدام النظام
+            أضف أي عدد من العملات لكل حساب — مثال: "البنك" برصيد سعودي ورصيد يمني معاً
           </p>
         </div>
         <div className="flex gap-2">
@@ -131,44 +142,55 @@ export default function OpeningBalancesPage() {
             if (catAccounts.length === 0) return null;
             return (
               <div key={cat} className="card overflow-hidden">
-                <div className="px-4 py-3 bg-forest-50 font-medium flex justify-between">
-                  <span>{categoryLabels[cat]}</span>
-                  <span>{totalFor(cat).toLocaleString("ar")}</span>
-                </div>
-                <table className="w-full table-base">
-                  <thead>
-                    <tr><th>الرقم</th><th>اسم الحساب</th><th>العملة</th><th>الرصيد الافتتاحي</th></tr>
-                  </thead>
-                  <tbody>
-                    {catAccounts.map((a) => (
-                      <tr key={a.id}>
-                        <td className="font-mono text-forest-800/70">{a.code}</td>
-                        <td className="font-medium">{a.name}</td>
-                        <td>
+                <div className="px-4 py-3 bg-forest-50 font-medium">{categoryLabels[cat]}</div>
+                <div className="divide-y divide-forest-50">
+                  {catAccounts.map((a) => {
+                    const accBalances = balances.filter((b) => b.account_id === a.id);
+                    return (
+                      <div key={a.id} className="p-4">
+                        <p className="font-medium mb-2">
+                          <span className="font-mono text-forest-800/70 text-sm ml-2">{a.code}</span>
+                          {a.name}
+                        </p>
+                        <div className="space-y-2">
+                          {accBalances.map((b) => (
+                            <div key={b.id} className="flex items-center gap-2">
+                              <span className="text-sm w-24 text-forest-800/60">{currencyLabel(b.currency_id)}</span>
+                              <input
+                                type="number"
+                                step="0.01"
+                                className="input max-w-[160px] no-print"
+                                value={valueFor(b)}
+                                onChange={(e) => setEdits((prev) => ({ ...prev, [b.id]: e.target.value }))}
+                              />
+                              <span className="hidden print:inline">{Number(valueFor(b)).toLocaleString("ar")}</span>
+                              {b.currency_id !== null && (
+                                <button className="text-red-600 text-xs no-print" onClick={() => removeCurrencyRow(b.id)}>
+                                  حذف
+                                </button>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                        <div className="flex items-center gap-2 mt-2 no-print">
                           <select
-                            className="input max-w-[140px]"
-                            value={currencyFor(a)}
-                            onChange={(e) => setCurrencyEdits((prev) => ({ ...prev, [a.id]: e.target.value }))}
+                            className="input max-w-[180px] text-sm"
+                            value={newCurrencyPick[a.id] || ""}
+                            onChange={(e) => setNewCurrencyPick((prev) => ({ ...prev, [a.id]: e.target.value }))}
                           >
-                            <option value="">الأساسية</option>
+                            <option value="">+ أضف عملة أخرى...</option>
                             {currencies.map((c) => (
-                              <option key={c.id} value={c.id}>{c.code}</option>
+                              <option key={c.id} value={c.id}>{c.code} - {c.name}</option>
                             ))}
                           </select>
-                        </td>
-                        <td>
-                          <input
-                            type="number"
-                            step="0.01"
-                            className="input max-w-[160px]"
-                            value={amountFor(a)}
-                            onChange={(e) => setAmountEdits((prev) => ({ ...prev, [a.id]: e.target.value }))}
-                          />
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                          <button className="text-forest-600 text-sm" onClick={() => addCurrencyRow(a.id)}>
+                            إضافة
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
             );
           })}
@@ -181,6 +203,9 @@ export default function OpeningBalancesPage() {
 
           {accounts.length > 0 && (
             <div className={`card p-5 ${balanced ? "bg-forest-50" : "bg-amber-50"}`}>
+              <p className="text-xs text-forest-800/50 mb-2">
+                (التحقق من التوازن يعتمد على أرصدة العملة الأساسية فقط)
+              </p>
               <div className="flex justify-between text-sm mb-1">
                 <span>إجمالي الأصول</span>
                 <span className="font-medium">{totalAssets.toLocaleString("ar")}</span>

@@ -10,12 +10,8 @@ type Account = {
   code: string;
   name: string;
   category: string;
-  opening_balance: number;
-  currency_id: string | null;
   parent_id: string | null;
-  is_active: boolean;
 };
-type Currency = { id: string; code: string; name: string };
 
 const categories = [
   { value: "اصول", label: "أصول" },
@@ -25,9 +21,8 @@ const categories = [
   { value: "مصروفات", label: "مصروفات" },
 ];
 
-const emptyForm = { code: "", name: "", category: "اصول", opening_balance: "0", currency_id: "", parent_id: "" };
+const emptyForm = { code: "", name: "", category: "اصول", parent_id: "" };
 
-// ترتيب الحسابات بحيث يظهر كل حساب فرعي مباشرة تحت أبيه
 function buildTree(accounts: Account[]): (Account & { depth: number })[] {
   const byParent: Record<string, Account[]> = {};
   accounts.forEach((a) => {
@@ -49,7 +44,6 @@ function buildTree(accounts: Account[]): (Account & { depth: number })[] {
 export default function AccountsPage() {
   const { org } = useAuth();
   const [accounts, setAccounts] = useState<Account[]>([]);
-  const [currencies, setCurrencies] = useState<Currency[]>([]);
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState(emptyForm);
@@ -57,17 +51,13 @@ export default function AccountsPage() {
 
   async function load() {
     if (!org) return;
-    const [accRes, curRes] = await Promise.all([
-      supabase
-        .from("accounts")
-        .select("id, code, name, category, opening_balance, currency_id, parent_id, is_active")
-        .eq("org_id", org.id)
-        .is("deleted_at", null)
-        .order("code"),
-      supabase.from("currencies").select("id, code, name").eq("org_id", org.id),
-    ]);
-    setAccounts(accRes.data || []);
-    setCurrencies(curRes.data || []);
+    const { data } = await supabase
+      .from("accounts")
+      .select("id, code, name, category, parent_id")
+      .eq("org_id", org.id)
+      .is("deleted_at", null)
+      .order("code");
+    setAccounts(data || []);
   }
 
   useEffect(() => {
@@ -82,14 +72,7 @@ export default function AccountsPage() {
   }
 
   function openEditForm(a: Account) {
-    setForm({
-      code: a.code,
-      name: a.name,
-      category: a.category,
-      opening_balance: String(a.opening_balance),
-      currency_id: a.currency_id || "",
-      parent_id: a.parent_id || "",
-    });
+    setForm({ code: a.code, name: a.name, category: a.category, parent_id: a.parent_id || "" });
     setEditingId(a.id);
     setShowForm(true);
   }
@@ -102,15 +85,17 @@ export default function AccountsPage() {
       code: form.code,
       name: form.name,
       category: form.category,
-      opening_balance: parseFloat(form.opening_balance || "0"),
-      currency_id: form.currency_id || null,
       parent_id: form.parent_id || null,
     };
 
     if (editingId) {
       await supabase.from("accounts").update(payload).eq("id", editingId);
     } else {
-      await supabase.from("accounts").insert({ org_id: org.id, ...payload });
+      const { data: newAcc } = await supabase.from("accounts").insert({ org_id: org.id, ...payload }).select().single();
+      // نُنشئ تلقائياً سطر رصيد افتتاحي بالعملة الأساسية بقيمة صفر، جاهزاً للتعديل من صفحة الأرصدة الافتتاحية
+      if (newAcc) {
+        await supabase.from("account_balances").insert({ org_id: org.id, account_id: newAcc.id, currency_id: null, opening_balance: 0 });
+      }
     }
 
     setForm(emptyForm);
@@ -130,7 +115,6 @@ export default function AccountsPage() {
     load();
   }
 
-  const currencyName = (id: string | null) => currencies.find((c) => c.id === id)?.code || "—";
   const tree = buildTree(accounts);
   const parentOptions = accounts.filter((a) => a.id !== editingId);
 
@@ -139,7 +123,9 @@ export default function AccountsPage() {
       <div className="flex items-center justify-between mb-6 no-print">
         <div>
           <h1 className="text-2xl font-medium">دليل الحسابات</h1>
-          <p className="text-forest-800/60 text-sm mt-1">القائمة الكاملة لحسابات المؤسسة، وتقدر تنشئ حسابات فرعية تحت أي حساب</p>
+          <p className="text-forest-800/60 text-sm mt-1">
+            كل حساب يقدر يحتفظ بأرصدة بأكثر من عملة معاً — أدرها من صفحة "الأرصدة الافتتاحية"
+          </p>
         </div>
         <div className="flex gap-2">
           <button className="btn-secondary" onClick={() => window.print()}>طباعة</button>
@@ -174,33 +160,20 @@ export default function AccountsPage() {
               <option key={c.value} value={c.value}>{c.label}</option>
             ))}
           </select>
-          <select className="input" value={form.currency_id} onChange={(e) => setForm({ ...form, currency_id: e.target.value })}>
-            <option value="">العملة الأساسية</option>
-            {currencies.map((c) => (
-              <option key={c.id} value={c.id}>{c.code} - {c.name}</option>
-            ))}
-          </select>
-
-          <select className="input sm:col-span-2" value={form.parent_id} onChange={(e) => setForm({ ...form, parent_id: e.target.value })}>
+          <select className="input" value={form.parent_id} onChange={(e) => setForm({ ...form, parent_id: e.target.value })}>
             <option value="">لا يوجد (حساب رئيسي)</option>
             {parentOptions.map((a) => (
               <option key={a.id} value={a.id}>{a.code} - {a.name}</option>
             ))}
           </select>
-          <input
-            className="input"
-            type="number"
-            step="0.01"
-            placeholder="الرصيد الافتتاحي"
-            value={form.opening_balance}
-            onChange={(e) => setForm({ ...form, opening_balance: e.target.value })}
-          />
-          <button type="submit" disabled={busy} className="btn-primary sm:col-span-2">
+          <button type="submit" disabled={busy} className="btn-primary sm:col-span-1">
             {busy ? "جارِ الحفظ..." : editingId ? "حفظ التعديل" : "حفظ الحساب"}
           </button>
-          <p className="text-xs text-forest-800/50 sm:col-span-5">
-            💡 مثال: أنشئ حساباً رئيسياً "الصندوق"، ثم أنشئ "صندوق فرعي 1" واختر "الصندوق" كحساب أب له.
-          </p>
+          {!editingId && (
+            <p className="text-xs text-forest-800/50 sm:col-span-5">
+              💡 بعد إنشاء الحساب، اذهب لصفحة "الأرصدة الافتتاحية" لإضافة رصيده بأي عدد من العملات تريد.
+            </p>
+          )}
         </form>
       )}
 
@@ -211,8 +184,6 @@ export default function AccountsPage() {
               <th>الرقم</th>
               <th>اسم الحساب</th>
               <th>النوع</th>
-              <th>العملة</th>
-              <th>الرصيد الافتتاحي</th>
               <th className="no-print">إجراءات</th>
             </tr>
           </thead>
@@ -225,8 +196,6 @@ export default function AccountsPage() {
                   {a.name}
                 </td>
                 <td>{categories.find((c) => c.value === a.category)?.label}</td>
-                <td dir="ltr" className="text-left">{currencyName(a.currency_id)}</td>
-                <td>{a.opening_balance.toLocaleString("ar")}</td>
                 <td className="no-print">
                   <div className="flex gap-3 text-sm">
                     <button className="text-forest-600 hover:underline" onClick={() => openEditForm(a)}>تعديل</button>
@@ -237,7 +206,7 @@ export default function AccountsPage() {
             ))}
             {accounts.length === 0 && (
               <tr>
-                <td colSpan={6} className="text-center py-8 text-forest-800/50">
+                <td colSpan={4} className="text-center py-8 text-forest-800/50">
                   لا توجد حسابات بعد. أضف أول حساب من الزر أعلاه.
                 </td>
               </tr>
